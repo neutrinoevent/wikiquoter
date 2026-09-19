@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>wq — reading room</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">
+    <span class="mark">wq</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="sub">reading room</span>
+  </div>
+  <div class="bar-right">
+    <select id="lang" class="lang" aria-label="Wikiquote language edition">
+      <option value="en">en</option><option value="de">de</option>
+      <option value="fr">fr</option><option value="es">es</option>
+      <option value="it">it</option><option value="pt">pt</option>
+      <option value="pl">pl</option><option value="ru">ru</option>
+      <option value="ja">ja</option><option value="la">la</option>
+    </select>
+    <button id="theme" class="ghost" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main class="page">
+
+  <form id="form" class="console" autocomplete="off">
+    <label class="prompt" for="cmd" aria-hidden="true">›</label>
+    <input id="cmd" name="cmd" type="text" spellcheck="false"
+           placeholder="Diligence   ·   wall -n 8   ·   q &quot;Samuel Johnson&quot; -n 5   ·   qotd">
+    <button id="go" class="go" type="submit">read</button>
+  </form>
+
+  <nav class="chips" id="chips" aria-label="Examples">
+    <button data-cmd="qotd">quote of the day</button>
+    <button data-cmd="wall -n 8 --max 220">a wall</button>
+    <button data-cmd="random -n 3">random page</button>
+    <button data-cmd="Diligence">Diligence</button>
+    <button data-cmd="q &quot;Samuel Johnson&quot; -n 5">Samuel Johnson</button>
+    <button data-cmd="q Socrates --about only -n 4">about Socrates</button>
+    <button data-cmd="cat-search philosoph">categories</button>
+  </nav>
+
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <section id="out" class="out"></section>
+
+  <footer class="foot">
+    <p>Text from <a href="https://en.wikiquote.org">Wikiquote</a>, CC&nbsp;BY-SA.
+       Click any quote to copy it.</p>
+    <p class="keys">
+      <kbd>/</kbd> focus &nbsp; <kbd>↑</kbd><kbd>↓</kbd> history &nbsp;
+      <kbd>⏎</kbd> read
+    </p>
+  </footer>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

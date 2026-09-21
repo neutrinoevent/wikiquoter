@@ -30,22 +30,24 @@ Anywhere a page is expected you can pass a **title**, `Title#Section`, or a
 
 ## Commands
 
-| | |
-|---|---|
-| `wq random` | a random page with a few of its quotes |
-| `wq random -p 5 --open` | five random pages, five browser tabs |
-| `wq random -c Themes -p 3` | random pages from a category |
-| `wq quote PAGE...` (`q`) | quotes from named pages (fetched in parallel) |
-| `wq open PAGE...` (`o`) | open pages/sections in tabs |
-| `wq search TERMS` (`s`) | search; `--quotes` shows quotes, `--open` opens hits |
-| `wq sections PAGE` | section tree with `#anchors` (`--urls` for full links) |
-| `wq category NAME` (`cat`) | `--list`, or `--random N` to sample it |
-| `wq cat-search TERMS` | find category names worth using |
-| `wq wall -n 12` (`w`) | one quote each from a dozen random pages |
-| `wq qotd` | quote of the day (`-d 2026-09-18` for another day) |
-| `wq save PAGE` / `wq saved` / `wq forget` | bookmarks |
-| `wq cache [--clear]` | cache location and size |
-| `wq selftest` | offline parser checks |
+Every reading command also takes the filters in the next section.
+
+| command | what it does | its own flags |
+|---|---|---|
+| `wq random` (`r`) | a random page with a few of its quotes | `-p N` pages · `-o` open in tabs · `-c CAT` draw from a category · `--depth N` subcategory depth |
+| `wq quote PAGE...` (`q`) | quotes from named pages, fetched in parallel | `-a` every quote |
+| `wq open PAGE...` (`o`) | open pages/sections in browser tabs | `-s SECTION` |
+| `wq search TERMS` (`s`) | search Wikiquote | `--quotes` show quotes from hits · `--per-page N` how many each · `-o` open every hit |
+| `wq sections PAGE` (`sec`) | section tree with `#anchors` | `--urls` full anchor URLs |
+| `wq category NAME` (`cat`) | browse a category | `-l` list titles · `-r N` sample N pages · `-o` open the sample · `--limit N` · `--depth N` |
+| `wq cat-search TERMS` | find category names worth using | `-n N` how many |
+| `wq wall -n 12` (`w`) | one quote each from several random pages | `-c CAT` confine it to a category · `--depth N` |
+| `wq qotd` | Wikiquote's quote of the day | `-d YYYY-MM-DD` another day · `-o` open the Main Page |
+| `wq save PAGE` | bookmark a page | `-s SECTION` · `-N NOTE` |
+| `wq saved` | list or use bookmarks | `-r N` quotes from N random bookmarks · `--quotes` from all · `-o` open them |
+| `wq forget PAGE...` | drop bookmarks | |
+| `wq cache` | cache location and size | `--clear` |
+| `wq selftest` | 32 offline parser checks | |
 
 ## Filtering and output
 

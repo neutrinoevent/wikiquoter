@@ -481,6 +481,11 @@ KEEP_FIRST_PARAM |= {"small", "smaller", "big", "larger", "nobold",
                      "noitalic", "em", "strong", "bracket"}
 
 
+# Book/serial identifiers: {{ISBN|0-87951-937-1}} renders "ISBN 0-87951-937-1".
+IDENTIFIER_TEMPLATES = {"isbn": "ISBN", "issn": "ISSN", "oclc": "OCLC",
+                        "doi": "doi:", "asin": "ASIN", "lccn": "LCCN"}
+
+
 def _split_template(inner: str) -> list:
     """Split a template body on top-level pipes."""
     parts, buf, depth_c, depth_b = [], [], 0, 0
@@ -530,6 +535,8 @@ def _template_text(inner: str) -> str:
         return "" if name == "sic" else " – "
     if name in ("nbsp",):
         return " "
+    if name in IDENTIFIER_TEMPLATES and positional:
+        return "%s %s" % (IDENTIFIER_TEMPLATES[name], positional[0].strip())
     return ""
 
 
@@ -591,16 +598,32 @@ def clean(text: str) -> str:
 
 
 class Quote:
-    __slots__ = ("text", "source", "page", "section", "about", "kind")
+    __slots__ = ("text", "source", "page", "section", "about", "kind",
+                 "author")
 
     def __init__(self, text, source="", page="", section="", about=False,
-                 kind="quote"):
+                 kind="quote", author=""):
         self.text = text
         self.source = source
         self.page = page
         self.section = section
         self.about = about
         self.kind = kind
+        # Who said it, when the page itself says so: on a person's page the
+        # '**' line names only the work ("Foreword to …"); the person is the
+        # page. Empty on theme and work pages, whose '**' lines name the
+        # speaker themselves.
+        self.author = author
+
+    def credit(self) -> str:
+        """The attribution to print or copy under the quote."""
+        if self.author:
+            if not self.source:
+                return self.author
+            if self.author.lower() in self.source.lower():
+                return self.source        # already names them
+            return self.author + ", " + self.source
+        return self.source or self.page
 
     def __repr__(self):
         return "Quote(%r, %r)" % (self.text[:40], self.source[:30])
@@ -608,12 +631,55 @@ class Quote:
     def as_dict(self):
         return {"text": self.text, "source": self.source, "page": self.page,
                 "section": self.section, "about": self.about,
-                "kind": self.kind}
+                "kind": self.kind, "author": self.author,
+                "credit": self.credit()}
 
     def key(self):
         norm = unicodedata.normalize("NFKD", self.text.lower())
         norm = re.sub(r"\W+", " ", norm).strip()
         return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
+
+
+# A person's page: Wikiquote files every biography under "<year> births" /
+# "<year> deaths" (or "Living people"); theme and work pages never are.
+RE_PERSON_CATEGORY = re.compile(
+    r"\[\[\s*category\s*:\s*(?:[^\]|]*\b(?:births|deaths)|living people)"
+    r"\s*(?:\|[^\]]*)?\]\]", re.I)
+
+# Sections on a person's page whose quotes are not, or not surely, theirs.
+NOT_THEIRS = re.compile(r"misattributed|disputed|about\b|by others|"
+                        r"said of|attributed to others", re.I)
+
+
+# Failing that, a biography's lead: a plain bold name (not the bold-italic of
+# a work's title) then life dates in brackets — "(14 March 1879 – 18 April
+# 1955)", "(born 1989)", "(c. 470 BC – 399 BC)". A TV run like "(2008–2013)"
+# has no month, "born" or era, so it doesn't count.
+RE_LEAD_NAME = re.compile(r"^'''(?!')")
+RE_LIFE_DATES = re.compile(
+    r"\bborn\b|\b(?:BC|BCE|AD|CE)\b|\bc\.\s*\d|"
+    r"\b(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\b", re.I)
+
+
+def is_person_page(wikitext: str) -> bool:
+    """Is this page one person's quotes (so a bare '**' line names only the
+    work)? English-edition signals; elsewhere it answers no, which leaves
+    attribution exactly as the page gives it."""
+    wikitext = wikitext or ""
+    if RE_PERSON_CATEGORY.search(wikitext):
+        return True
+    for line in wikitext.split("\n"):
+        if line.startswith("'''"):
+            if not RE_LEAD_NAME.match(line):
+                return False              # an italic title: a work
+            flat = RE_WIKILINK.sub(lambda m: m.group(2) or m.group(1), line)
+            m = re.search(r"\(([^()]*)\)", flat)
+            return bool(m and re.search(r"\d", m.group(1)) and
+                        RE_LIFE_DATES.search(m.group(1)))
+        if line.startswith("=="):
+            break                         # no lead before the first section
+    return False
 
 
 def parse_quotes(wikitext: str, page: str = "", min_len: int = 16,
@@ -717,6 +783,7 @@ def parse_quotes(wikitext: str, page: str = "", min_len: int = 16,
     flush_dialogue()
 
     # drop junk that slipped through
+    person = page and is_person_page(wikitext)
     cleaned = []
     for q in quotes:
         t = q.text.strip()
@@ -724,6 +791,9 @@ def parse_quotes(wikitext: str, page: str = "", min_len: int = 16,
             continue
         if re.match(r"^(redirect|defaultsort|thumb\b)", t, re.I):
             continue
+        if person and not q.about and q.kind == "quote" and \
+                not NOT_THEIRS.search(q.section):
+            q.author = page
         cleaned.append(q)
     return cleaned
 
@@ -911,7 +981,7 @@ def print_quotes(quotes, args, api: Api, header: str = "") -> None:
         for q in quotes:
             body = "\n> ".join(q.text.split("\n"))
             print("> " + body)
-            attr = q.source or q.page
+            attr = q.credit()
             if attr:
                 print(">\n> — %s" % attr)
             print()
@@ -1093,7 +1163,7 @@ def emit(quotes, args, api, header="", page="", total=None, section=""):
     print_quotes(quotes, args, api, header=header)
     if args.copy:
         blob = "\n\n".join(
-            q.text + ("\n— " + (q.source or q.page) if (q.source or q.page) else "")
+            q.text + ("\n— " + q.credit() if q.credit() else "")
             for q in quotes)
         print(Style.green("copied to clipboard") if copy_to_clipboard(blob)
               else Style.dim("(no clipboard tool found)"))
@@ -1846,6 +1916,40 @@ def _selftest():
                                        "Birthday cake"])
           == ["Birthday cake", "S Club 7: Boyfriends & Birthdays"],
           "related pages: named after it, not itself, not lists, no dupes")
+    # Attribution on a person's page: the '**' line names the work only.
+    person = ("'''[[w:Terry Pratchett|Terry Pratchett]]''' ([[28 April]] "
+              "[[1948]] – [[12 March]] [[2015]]) was an English author.\n"
+              "==Quotes==\n"
+              "*'''[[Imagination]], not [[intelligence]], made us human.'''\n"
+              "**Foreword to ''The Ultimate Encyclopedia of Fantasy'' (1998), "
+              "<small>{{ISBN|0-87951-937-1}}</small>, and more\n"
+              "* A line he said, with a source that already names him.\n"
+              "** Terry Pratchett, in an interview\n"
+              "==Misattributed==\n* Something he never said at all, really.\n"
+              "==Quotes about Pratchett==\n* He was a very funny man indeed.\n"
+              "** A. Critic\n")
+    pq = {q.text[:12]: q for q in parse_quotes(person, page="Terry Pratchett")}
+    check(pq["Imagination,"].credit().startswith(
+              "Terry Pratchett, Foreword to The Ultimate Encyclopedia"),
+          "person page: copied credit names the author, then the work")
+    check("ISBN 0-87951-937-1, and" in pq["Imagination,"].source
+          and ", ," not in pq["Imagination,"].source,
+          "{{ISBN|…}} renders as 'ISBN …', leaving no orphaned commas")
+    check(pq["A line he sa"].credit() == "Terry Pratchett, in an interview",
+          "person page: author not repeated when the source names them")
+    check(not pq["Something he"].author and not pq["He was a ver"].author
+          and pq["He was a ver"].credit() == "A. Critic",
+          "misattributed / 'quotes about' are not credited to the page")
+    check(not any(q.author for q in parse_quotes(FIXTURE_THEME, "Diligence")),
+          "theme page: the '**' line already names the author")
+    check(is_person_page("[[Category:1948 births]]")
+          and is_person_page("'''Albert Einstein''' ([[14 March]] 1879 – "
+                             "[[18 April]] 1955) was a physicist.")
+          and is_person_page("'''Taylor Swift''' (born 1989) is a singer.")
+          and not is_person_page("'''''Breaking Bad''''' (2008–2013) was a "
+                                 "drama.")
+          and not is_person_page("'''Mars''' (1976–1990) was a band."),
+          "person pages: births/deaths category, or a lead with life dates")
     check(_broader_words("Quantum mechanics") == ["Quantum", "mechanics"]
           and _broader_words("Birthday") == []
           and _broader_words("the art of war") == [],

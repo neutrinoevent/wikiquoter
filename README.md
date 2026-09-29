@@ -11,7 +11,7 @@ chmod +x wq.py
 mv wq.py ~/.local/bin/wq      # or:  ln -s "$PWD/wq.py" /usr/local/bin/wq
 ```
 
-No install, no dependencies. `wq selftest` runs 41 offline checks.
+No install, no dependencies. `wq selftest` runs 47 offline checks.
 For a browser front end, see [the reading room](#the-reading-room).
 
 ## A quick tour
@@ -49,7 +49,7 @@ Every reading command also takes the filters in the next section.
 | `wq saved` | list or use bookmarks | `-r N` quotes from N random bookmarks · `--quotes` from all · `-o` open them |
 | `wq forget PAGE...` | drop bookmarks | |
 | `wq cache` | cache location and size | `--clear` |
-| `wq selftest` | 41 offline checks | |
+| `wq selftest` | 47 offline checks | |
 
 ## Filtering and output
 
@@ -223,6 +223,17 @@ explicitly. `wq selftest` pins all of these (no network needed):
   `wq random -p 3` render several pages, so quotes are buffered and flushed
   once; concatenated arrays would not survive a pipe into `jq`. Human-facing
   notices go to stderr in the machine formats, leaving stdout clean.
+- **On a person's page the `**` line names the work, not the person** —
+  "Foreword to *The Ultimate Encyclopedia of Fantasy*" under Terry Pratchett.
+  So copied quotes, `--copy` and `--format md` credit the page's subject
+  first: "— Terry Pratchett, Foreword to …". A page counts as a person's when
+  it is filed under *… births* / *… deaths*, or its opening line gives life
+  dates; *Quotes about*, *Misattributed* and *Disputed* sections are left as
+  the page gives them. Theme pages already name the speaker on the `**` line
+  and are untouched. JSON quotes carry this as `author` (empty unless it
+  applies) and `credit` (the full line to print under the quote).
+- **Identifier templates keep their text** — `{{ISBN|0-87951-937-1}}`
+  renders as *ISBN 0-87951-937-1*, not as a gap between two commas.
 - **`See also` / `References` / `External links` are skipped**, so anything
   that suggests a section to read — such as the tip `wq sections` prints —
   has to pick one that actually holds quotes.

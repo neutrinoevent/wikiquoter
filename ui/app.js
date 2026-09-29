@@ -137,7 +137,10 @@
 
       card.addEventListener("click", function (ev) {
         if (ev.target.closest("a")) return;   // let links be links
-        var blob = q.text + (q.source ? "\n— " + q.source : "");
+        // wq supplies the full attribution (author + work on a person's
+        // page); fall back to the bare source for older output.
+        var credit = q.credit != null ? q.credit : q.source;
+        var blob = q.text + (credit ? "\n— " + credit : "");
         copy(blob, card);
       });
 

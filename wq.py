@@ -32,6 +32,7 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -295,11 +296,17 @@ class Api:
         return out[:n]
 
     def wikitext(self, title: str) -> str:
+        return self.page(title)[1]
+
+    def page(self, title: str):
+        """(canonical title, wikitext). The title has redirects followed and
+        case normalised: 'birthdays' comes back as 'Birthday'."""
         data = self.get({
             "action": "parse", "page": title,
             "prop": "wikitext", "redirects": "1",
         })
-        return data.get("parse", {}).get("wikitext", "") or ""
+        p = data.get("parse", {})
+        return p.get("title") or title, p.get("wikitext", "") or ""
 
     def sections(self, title: str) -> list:
         data = self.get({
@@ -309,12 +316,21 @@ class Api:
         return data.get("parse", {}).get("sections", []) or []
 
     def search(self, term: str, limit: int = 10, namespace: str = "0") -> list:
+        return self.search_page(term, limit=limit, namespace=namespace)[0]
+
+    def search_page(self, term: str, limit: int = 10, offset: int = 0,
+                    namespace: str = "0"):
+        """One page of full-text hits: (hits, total hits, next offset|None)."""
         data = self.get({
             "action": "query", "list": "search",
             "srsearch": term, "srlimit": str(limit),
+            "sroffset": str(offset), "srinfo": "totalhits",
             "srnamespace": namespace,
         })
-        return data.get("query", {}).get("search", []) or []
+        q = data.get("query", {})
+        total = q.get("searchinfo", {}).get("totalhits", 0)
+        return (q.get("search", []) or [], total,
+                data.get("continue", {}).get("sroffset"))
 
     def prefix_search(self, term: str, limit: int = 10,
                       namespace: str = "0") -> list:
@@ -772,6 +788,103 @@ def render_quote(q: Quote, width: int, show_page: bool = True,
 # that must still add up to a single document, so collect and flush in main().
 _JSON_BUFFER = []
 
+# What a run showed against what was there, and where to read next. emit()
+# records each page; commands add their own next steps. Pretty output prints
+# the steps as a hint; `--format json --envelope` returns all of it.
+_REPORT = {"pages": [], "next": [], "search": None}
+
+
+def _arg(a) -> str:
+    """Quote one argument readably: "SpongeBob's", not 'SpongeBob'"'"'s'."""
+    a = str(a)
+    if shlex.quote(a) == a:
+        return a
+    if not any(c in a for c in '"$`\\!'):
+        return '"%s"' % a
+    return shlex.quote(a)
+
+
+def _cmd(*argv) -> str:
+    """A wq command line (without the leading 'wq') that shlex can split,
+    and that pastes safely into a shell."""
+    return " ".join(_arg(a) for a in argv)
+
+
+def _filter_flags(args, section: str = "") -> list:
+    """The filters a run used, as flags, so a follow-up keeps them."""
+    flags = []
+    section = section or getattr(args, "section", "")
+    if section:
+        flags += ["-s", section]
+    if getattr(args, "grep", ""):
+        flags += ["-g", args.grep]
+    if getattr(args, "min", 0):
+        flags += ["--min", args.min]
+    if getattr(args, "max", 0):
+        flags += ["--max", args.max]
+    if getattr(args, "about", "include") != "include":
+        flags += ["--about", args.about]
+    if getattr(args, "no_dialogue", False):
+        flags += ["--no-dialogue"]
+    return flags
+
+
+def suggest(kind: str, label: str, *argv) -> None:
+    """Offer a next step. kind: more | page | mentions | next-batch."""
+    _REPORT["next"].append({"kind": kind, "label": label, "cmd": _cmd(*argv)})
+
+
+def _more_steps(pages, limit: int = 3) -> list:
+    """'All N from Page' for the pages that had more than was shown."""
+    short = [p for p in pages if p["shown"] < p["total"]]
+    short.sort(key=lambda p: p["shown"] - p["total"])
+    steps = []
+    for p in short[:limit]:
+        where = p["title"] + (" › " + p["section"] if p["section"] else "")
+        noun = "matching quotes" if p["filtered"] else "quotes"
+        steps.append({"kind": "more", "cmd": p["all_cmd"],
+                      "label": "All %d %s from %s" % (p["total"], noun, where)})
+    return steps
+
+
+def envelope() -> dict:
+    """The --envelope document. Plain --format json stays a bare list."""
+    pages = [{k: v for k, v in p.items() if k != "filtered"}
+             for p in _REPORT["pages"]]
+    return {"quotes": _JSON_BUFFER, "pages": pages, "next": next_steps(),
+            "search": _REPORT["search"]}
+
+
+def next_steps() -> list:
+    steps, seen = [], set()
+    for s in _more_steps(_REPORT["pages"]) + _REPORT["next"]:
+        if s["cmd"] not in seen:
+            seen.add(s["cmd"])
+            steps.append(s)
+    return steps
+
+
+def _wants_next(args) -> bool:
+    """Next steps cost extra lookups; only work them out if they are shown."""
+    return args.format == "pretty" or (args.format == "json" and
+                                       getattr(args, "envelope", False))
+
+
+def print_next(steps) -> None:
+    pages = [s for s in steps if s["kind"] == "page"]
+    rows = [s for s in steps if s["kind"] != "page"]
+    if not steps:
+        return
+    print(Style.dim("keep reading"))
+    w = min(40, max([len("wq " + s["cmd"]) for s in rows] or [0]))
+    for s in rows:
+        print("  " + Style.cyan(("wq " + s["cmd"]).ljust(w)) +
+              "  " + Style.dim(s["label"]))
+    if pages:
+        print("  " + Style.dim("related pages: ") +
+              " · ".join(s["label"] for s in pages))
+    print()
+
 
 def print_quotes(quotes, args, api: Api, header: str = "") -> None:
     if args.format == "json":
@@ -887,8 +1000,8 @@ def remember_seen(keys, cap=800):
 
 
 def fetch_page_quotes(api: Api, title: str, args, section: str = ""):
-    wt = api.wikitext(title)
-    qs = parse_quotes(wt, page=title, min_len=args.min or 16,
+    canonical, wt = api.page(title)
+    qs = parse_quotes(wt, page=canonical, min_len=args.min or 16,
                       include_dialogue=not args.no_dialogue)
     return filter_quotes(qs, section=section or args.section,
                          grep=args.grep, minlen=args.min, maxlen=args.max,
@@ -948,10 +1061,22 @@ def notice(args, msg: str) -> None:
         sys.stderr.write(msg + "\n")
 
 
-def emit(quotes, args, api, header=""):
+def emit(quotes, args, api, header="", page="", total=None, section=""):
+    """Print quotes. With page + total, also record 'shown N of total' so the
+    run can offer the rest (see _REPORT)."""
     if not quotes:
         notice(args, "(no quotes matched)")
         return
+    if page and total is not None:
+        flags = _filter_flags(args, section)
+        _REPORT["pages"].append({
+            "title": page, "section": section or args.section,
+            "shown": len(quotes), "total": total,
+            "filtered": any(f in flags for f in
+                            ("-g", "--min", "--max", "--about", "--no-dialogue")),
+            "all_cmd": _cmd("q", page, "-a", *flags),
+            "url": api.page_url(page, section or args.section),
+        })
     print_quotes(quotes, args, api, header=header)
     if args.copy:
         blob = "\n\n".join(
@@ -998,7 +1123,8 @@ def cmd_random(args, api: Api, rng):
         if not qs:
             continue
         chosen = pick(qs, args.number, rng, fresh=args.fresh)
-        emit(chosen, args, api, header="%s  (%s)" % (title, api.page_url(title)))
+        emit(chosen, args, api, header="%s  (%s)" % (title, api.page_url(title)),
+             page=title, total=len(qs))
         shown += 1
     if shown == 0:
         die("random pages had no quotes this time — try again")
@@ -1021,14 +1147,18 @@ def cmd_quote(args, api: Api, rng):
         if not qs:
             notice(args, "(%s: nothing matched)" % title)
             continue
+        name = qs[0].page or title        # as the wiki spells it
         chosen = qs if args.all else pick(qs, args.number, rng, fresh=args.fresh)
         if not args.all:
             chosen.sort(key=lambda q: (q.section, q.text[:40]))
         emit(chosen, args, api,
-             header="%s%s" % (title, "  › " + sec if sec else ""))
+             header="%s%s" % (name, "  › " + sec if sec else ""),
+             page=name, total=len(qs), section=sec)
         any_out = True
     if not any_out:
         sys.exit(2)
+    if len(titles) == 1 and _wants_next(args):
+        _suggest_around(api, name)
 
 
 def cmd_open(args, api: Api, rng):
@@ -1040,10 +1170,18 @@ def cmd_open(args, api: Api, rng):
 
 
 def cmd_search(args, api: Api, rng):
-    hits = api.search(" ".join(args.terms), limit=args.number)
+    term = " ".join(args.terms)
+    hits, total, nxt = api.search_page(term, limit=args.number,
+                                       offset=args.offset)
     if not hits:
-        die("no results for %r" % " ".join(args.terms))
+        die("no %sresults for %r" % ("more " if args.offset else "", term))
     titles = [h["title"] for h in hits]
+    if nxt:
+        extra = ["--quotes"] if args.quotes else []
+        suggest("next-batch", "Next %d results (from %d of %s)"
+                % (args.number, nxt + 1, "{:,}".format(total)),
+                "search", *args.terms, "-n", args.number, "--offset", nxt,
+                *extra)
 
     if args.open:
         open_urls([api.page_url(t, args.section) for t in titles], args)
@@ -1052,7 +1190,7 @@ def cmd_search(args, api: Api, rng):
     if not args.quotes:
         width = term_width()
         print()
-        for i, h in enumerate(hits, 1):
+        for i, h in enumerate(hits, args.offset + 1):
             snippet = clean(re.sub(r"</?span[^>]*>", "", h.get("snippet", "")))
             print(Style.cyan("%2d. " % i) + Style.bold(h["title"]))
             for ln in textwrap.wrap(snippet, width - 6):
@@ -1067,7 +1205,82 @@ def cmd_search(args, api: Api, rng):
         if not qs:
             continue
         emit(pick(qs, args.per_page, rng, fresh=args.fresh), args, api,
-             header=t)
+             header=t, page=t, total=len(qs))
+
+
+def _related_filter(title: str, candidates) -> list:
+    """Titles that contain `title`, minus the page itself and index pages."""
+    key = title.lower()
+    out = []
+    for t in _dedupe(candidates):
+        tl = t.lower()
+        if tl == key or key not in tl:
+            continue
+        if re.match(r"^(List of|Wikiquote:)", t):
+            continue
+        out.append(t)
+    return out
+
+
+def _suggest_around(api: Api, title: str, limit: int = 6) -> None:
+    """After one page: pages named after the same thing, and quotes on other
+    pages that mention it. Best effort — a failed lookup costs only the hint."""
+    try:
+        cands = [h["title"] for h in api.prefix_search(title, limit=10)]
+        q = '"%s"' % title if " " in title else title
+        cands += [h["title"] for h in api.search("intitle:" + q, limit=10)]
+    except WikiquoteError:
+        cands = []
+    for t in _related_filter(title, cands)[:limit]:
+        suggest("page", t, "q", t)
+    suggest("mentions", "Quotes that mention “%s” on other pages" % title,
+            "mentions", title)
+
+
+def cmd_mentions(args, api: Api, rng):
+    """Quotes, from anywhere, whose text mentions a word or phrase.
+
+    Full-text search finds the pages; each page's quotes are then kept only if
+    they contain the phrase. One batch of pages per run; --offset pages on.
+    """
+    phrase = " ".join(args.terms).strip()
+    hits, total, nxt = api.search_page(phrase, limit=args.number,
+                                       offset=args.offset)
+    if not hits:
+        die("no %spages mention %r" % ("more " if args.offset else "", phrase))
+
+    user_rx = re.compile(args.grep, re.I) if args.grep else None
+    args.grep = re.escape(phrase)
+    titles = [h["title"] for h in hits
+              if not re.match(r"^(List of|Wikiquote:)", h["title"])]
+    results = fetch_many(api, titles, args, workers=6)
+
+    shown = 0
+    for t in titles:                      # keep search-rank order
+        qs = results.get(t) or []
+        if user_rx:
+            qs = [q for q in qs
+                  if user_rx.search(q.text) or user_rx.search(q.source)]
+        if not qs:
+            continue
+        emit(pick(qs, args.per_page, rng, fresh=args.fresh), args, api,
+             header=t, page=t, total=len(qs))
+        shown += 1
+
+    end = args.offset + len(hits)
+    _REPORT["search"] = {"term": phrase, "from": args.offset + 1, "to": end,
+                         "total": total}
+    notice(args, "(%d page%s with quotes that mention “%s”, from pages "
+                 "%d–%d of %s that contain it)"
+           % (shown, "" if shown == 1 else "s", phrase, args.offset + 1, end,
+              "{:,}".format(total)))
+    if nxt:
+        extra = [] if args.number == 20 else ["-n", args.number]
+        extra += [] if args.per_page == 3 else ["--per-page", args.per_page]
+        suggest("next-batch", "Search the next %d pages (%d–%d of %s)"
+                % (args.number, end + 1, min(total, end + args.number),
+                   "{:,}".format(total)),
+                "mentions", phrase, "--offset", nxt, *extra)
 
 
 def cmd_sections(args, api: Api, rng):
@@ -1122,7 +1335,7 @@ def cmd_category(args, api: Api, rng):
         qs = results.get(t) or []
         if qs:
             emit(pick(qs, args.number, rng, fresh=args.fresh), args, api,
-                 header=t)
+                 header=t, page=t, total=len(qs))
 
 
 def cmd_cat_search(args, api: Api, rng):
@@ -1295,7 +1508,8 @@ def cmd_saved(args, api: Api, rng):
                 continue
             if qs:
                 emit(pick(qs, args.number, rng, fresh=args.fresh), args, api,
-                     header=b["title"])
+                     header=b["title"], page=b["title"], total=len(qs),
+                     section=b.get("section", ""))
         return
     print()
     for i, b in enumerate(items, 1):
@@ -1504,6 +1718,31 @@ def _selftest():
           "external link label kept")
     check(clean("&mdash;dash") == "—dash", "html entities decoded")
 
+    # "shown 3 of 22" and the steps that widen the net.
+    odd = ["q", "Birthday cake", "SpongeBob's Big Birthday Blowout",
+           "-s", "Zanoni (1842)", "-g", 'say "hi"', "-a"]
+    check(shlex.split(_cmd(*odd)) == odd,
+          "next-step commands survive shlex.split")
+    check(_cmd("q", "SpongeBob's Big Birthday Blowout")
+          == 'q "SpongeBob\'s Big Birthday Blowout"',
+          "next-step commands quote titles readably")
+    page = {"title": "Birthday", "section": "", "shown": 3, "total": 22,
+            "filtered": False, "all_cmd": "q Birthday -a"}
+    steps = _more_steps([page, dict(page, title="Cake", shown=4, total=4)])
+    check(len(steps) == 1 and steps[0]["cmd"] == "q Birthday -a"
+          and "22" in steps[0]["label"],
+          "'all N' offered only where more exists than was shown")
+    check(_related_filter("Birthday", ["Birthday", "Birthday cake",
+                                       "Birth defect", "List of birthdays",
+                                       "S Club 7: Boyfriends & Birthdays",
+                                       "Birthday cake"])
+          == ["Birthday cake", "S Club 7: Boyfriends & Birthdays"],
+          "related pages: named after it, not itself, not lists, no dupes")
+    mq = [Quote("Many happy Birthdays to you, and many more of them."),
+          Quote("Nothing to do with the matter at hand, truly.")]
+    check(len(filter_quotes(mq, grep=re.escape("birthday"))) == 1,
+          "mentions match the phrase case-insensitively, plurals included")
+
     print()
     if fails:
         print(Style.red("%d check(s) failed" % len(fails)))
@@ -1555,6 +1794,9 @@ def add_globals(p, suppress=False):
                    help="cache lifetime in seconds (default 86400)")
     g.add_argument("--dry-run", action="store_true", default=d(False),
                    help="print URLs instead of opening a browser")
+    g.add_argument("--envelope", action="store_true", default=d(False),
+                   help="with --format json: one object holding the quotes, "
+                        "per-page totals and suggested next commands")
 
 
 def build_parser():
@@ -1574,6 +1816,7 @@ def build_parser():
               wq q https://en.wikiquote.org/wiki/Samuel_Johnson --all
               wq open Diligence "Samuel Johnson" Main_Page
               wq search "memento mori" --quotes
+              wq mentions birthday                 quotes on any page that say it
               wq sections "Edward Bulwer-Lytton" --urls
               wq category Philosophers --random 3
               wq wall -n 12 --max 240
@@ -1618,8 +1861,20 @@ def build_parser():
     sp.add_argument("--quotes", action="store_true", help="show quotes from hits")
     sp.add_argument("--per-page", type=int, default=2,
                    help="quotes per hit with --quotes")
+    sp.add_argument("--offset", type=int, default=0,
+                   help="skip this many results (paging)")
     add_common(sp, number_default=8)
     sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser("mentions", aliases=["m"],
+                        help="quotes from any page that mention a phrase")
+    sp.add_argument("terms", nargs="+")
+    sp.add_argument("--per-page", type=int, default=3,
+                   help="quotes per page (0 = all)")
+    sp.add_argument("--offset", type=int, default=0,
+                   help="skip this many pages of search results (paging)")
+    add_common(sp, number_default=20)
+    sp.set_defaults(func=cmd_mentions)
 
     sp = sub.add_parser("sections", aliases=["sec"], help="list a page's sections")
     sp.add_argument("page")
@@ -1711,8 +1966,12 @@ def main(argv=None):
 
     try:
         args.func(args, api, rng)
-        if args.format == "json" and _JSON_BUFFER:
+        if args.format == "json" and args.envelope:
+            print(json.dumps(envelope(), ensure_ascii=False, indent=2))
+        elif args.format == "json" and _JSON_BUFFER:
             print(json.dumps(_JSON_BUFFER, ensure_ascii=False, indent=2))
+        elif args.format == "pretty":
+            print_next(next_steps())
     except MissingPage as e:
         die("page not found: %s" % e)
     except WikiquoteError as e:

@@ -36,7 +36,7 @@ WQ = os.path.join(HERE, "wq.py")
 COMMANDS = {
     "random", "r", "quote", "q", "open", "o", "search", "s", "sections", "sec",
     "category", "cat", "cat-search", "wall", "w", "qotd", "save", "saved",
-    "forget", "cache", "selftest",
+    "forget", "cache", "selftest", "mentions", "m",
 }
 
 # Commands whose output is a list of quotes; everything else comes back as text.
@@ -96,8 +96,31 @@ def build_argv(raw, lang="en"):
     wants_json = cmd not in TEXTUAL and not any(
         t == "--format" for t in argv)
     if wants_json:
-        argv += ["--format", "json"]
+        # The envelope carries per-page totals and wq's suggested next steps
+        # alongside the quotes; the UI renders those as 'keep reading'.
+        argv += ["--format", "json", "--envelope"]
     return argv, cmd, wants_json, note
+
+
+def unpack(out):
+    """wq's JSON output -> (quotes, extras). Accepts the envelope or, for
+    a hand-typed '--format json', a bare list."""
+    data = json.loads(out) if out.strip() else []
+    if isinstance(data, list):
+        return data, {}
+    extras = {k: data.get(k) for k in ("pages", "next", "search")
+              if data.get(k)}
+    return data.get("quotes") or [], extras
+
+
+def mentions_step(raw):
+    """Offer 'quotes that mention <what was typed>'. Composes a wq command;
+    deciding what counts as a mention stays in wq.py."""
+    arg = shlex.quote(raw)
+    if arg != raw and not any(c in raw for c in '"$`\\!'):
+        arg = '"%s"' % raw                # match wq's readable quoting
+    return {"kind": "mentions", "cmd": "mentions " + arg,
+            "label": u"Quotes that mention “%s”" % raw}
 
 
 def execute(raw, lang="en"):
@@ -118,19 +141,25 @@ def execute(raw, lang="en"):
             bcode, bout, _berr = run_wq(bargv)
             if bcode == 0 and bout.strip():
                 try:
-                    data = json.loads(bout)
+                    data, extras = unpack(bout)
                 except ValueError:
-                    data = None
+                    data, extras = None, {}
                 if data:
+                    # wq already offers mentions of the page it found; offer
+                    # the typed phrase too when it differs by more than case.
+                    if raw.strip().lower() != best.lower():
+                        extras["next"] = [mentions_step(raw.strip())] + \
+                            extras.get("next", [])
                     return Result(ok=True, kind="quotes", cmd="quote",
                                   quotes=data, argv=" ".join(bargv),
                                   note=u"No page called “%s” — showing “%s”."
-                                       % (raw.strip(), best))
+                                       % (raw.strip(), best), **extras)
         sargv, _, _, _ = build_argv("search " + raw, lang)
         scode, sout, serr = run_wq(sargv)
         if scode == 0:
             return Result(ok=True, kind="text", cmd="search", text=sout,
                           argv=" ".join(sargv),
+                          next=[mentions_step(raw.strip())],
                           note="No page called “%s” — searched instead."
                                % raw.strip())
 
@@ -147,13 +176,13 @@ def execute(raw, lang="en"):
 
     if wants_json:
         try:
-            data = json.loads(out) if out.strip() else []
+            data, extras = unpack(out)
         except ValueError:
             # e.g. '(no quotes matched)' printed as prose
             return Result(ok=True, kind="text", cmd=cmd, text=out.strip(),
                           argv=" ".join(argv))
         return Result(ok=True, kind="quotes", cmd=cmd, quotes=data,
-                      argv=" ".join(argv))
+                      argv=" ".join(argv), **extras)
 
     return Result(ok=True, kind="text", cmd=cmd, text=out, argv=" ".join(argv))
 

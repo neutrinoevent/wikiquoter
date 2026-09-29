@@ -329,6 +329,68 @@ a:hover { text-decoration-color: var(--accent); }
   vertical-align: 1px;
 }
 
+/* keep reading — wq's next steps. Rows, not buttons-as-boxes: hairline
+   rules like the quotes above, the accent only on hover. */
+
+/* no top rule: the last quote's own rule already closes the list above */
+.next { margin-top: 18px; }
+.next h3 {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.next .step {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 10px 0;
+  cursor: pointer;
+}
+.next .step:last-child { border-bottom: 0; }
+.next .step .arrow { color: var(--muted); flex: 0 0 auto; }
+.next .step:hover, .next .step:hover .arrow { color: var(--accent); }
+
+.next .related {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.next .related:last-child { border-bottom: 0; }
+.next .related .label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-right: 6px;
+}
+.next .related button {
+  font-family: var(--serif);
+  font-size: 14px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 1px 2px;
+  cursor: pointer;
+}
+.next .related button:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* textual output (sections, search, categories, cache) */
 
 .text-out {

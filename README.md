@@ -11,7 +11,7 @@ chmod +x wq.py
 mv wq.py ~/.local/bin/wq      # or:  ln -s "$PWD/wq.py" /usr/local/bin/wq
 ```
 
-No install, no dependencies. `wq selftest` runs 32 offline parser checks.
+No install, no dependencies. `wq selftest` runs 37 offline checks.
 For a browser front end, see [the reading room](#the-reading-room).
 
 ## A quick tour
@@ -20,6 +20,7 @@ For a browser front end, see [the reading room](#the-reading-room).
 wq qotd                                    # Main_Page's quote of the day
 wq q Diligence                             # the Diligence page
 wq q "Samuel Johnson" -n 5                 # five from Samuel Johnson
+wq mentions birthday                       # quotes on any page that say it
 wq sections "Edward Bulwer-Lytton"         # every section + its #anchor
 wq q "Edward Bulwer-Lytton" -s "Zanoni (1842)" --all
 wq open https://en.wikiquote.org/wiki/Edward_Bulwer-Lytton#Zanoni_\(1842\)
@@ -37,7 +38,8 @@ Every reading command also takes the filters in the next section.
 | `wq random` (`r`) | a random page with a few of its quotes | `-p N` pages · `-o` open in tabs · `-c CAT` draw from a category · `--depth N` subcategory depth |
 | `wq quote PAGE...` (`q`) | quotes from named pages, fetched in parallel | `-a` every quote |
 | `wq open PAGE...` (`o`) | open pages/sections in browser tabs | `-s SECTION` |
-| `wq search TERMS` (`s`) | search Wikiquote | `--quotes` show quotes from hits · `--per-page N` how many each · `-o` open every hit |
+| `wq search TERMS` (`s`) | search Wikiquote | `--quotes` show quotes from hits · `--per-page N` how many each · `--offset N` page on · `-o` open every hit |
+| `wq mentions TERMS` (`m`) | quotes from any page whose text contains the phrase | `-n N` pages searched per run (20) · `--per-page N` quotes each (3, 0 = all) · `--offset N` the next batch |
 | `wq sections PAGE` (`sec`) | section tree with `#anchors` | `--urls` full anchor URLs |
 | `wq category NAME` (`cat`) | browse a category | `-l` list titles · `-r N` sample N pages · `-o` open the sample · `--limit N` · `--depth N` |
 | `wq cat-search TERMS` | find category names worth using | `-n N` how many |
@@ -47,7 +49,7 @@ Every reading command also takes the filters in the next section.
 | `wq saved` | list or use bookmarks | `-r N` quotes from N random bookmarks · `--quotes` from all · `-o` open them |
 | `wq forget PAGE...` | drop bookmarks | |
 | `wq cache` | cache location and size | `--clear` |
-| `wq selftest` | 32 offline parser checks | |
+| `wq selftest` | 37 offline checks | |
 
 ## Filtering and output
 
@@ -67,9 +69,45 @@ Global (accepted before *or* after the subcommand):
 ```
 --format pretty|plain|md|json    --lang de|fr|es|...   --seed N
 --width N   --color auto|always|never   --dry-run   --no-cache  --cache-ttl S
+--envelope    with --format json: an object instead of a bare list
 ```
 
 `--dry-run` prints URLs instead of opening a browser — handy over SSH.
+
+### Reading further
+
+A reading command shows a sample — three quotes from a page by default — and
+says where the rest is. In the default format it ends with the commands that
+widen the net:
+
+```
+keep reading
+  wq q Birthday -a      All 22 quotes from Birthday
+  wq mentions Birthday  Quotes that mention “Birthday” on other pages
+  related pages: Birthday cake · SpongeBob's Big Birthday Blowout · …
+```
+
+Any filters in play (`-s`, `-g`, `--max`, …) carry over into the suggestions.
+`mentions` works in batches of search results and suggests the next batch.
+
+`--format json` stays a bare list of quotes, one document per run.
+`--format json --envelope` wraps the same list with what was left out:
+
+```json
+{
+  "quotes": [ ... ],
+  "pages":  [{"title": "Birthday", "section": "", "shown": 3, "total": 22,
+              "all_cmd": "q Birthday -a", "url": "https://…"}],
+  "next":   [{"kind": "more", "label": "All 22 quotes from Birthday",
+              "cmd": "q Birthday -a"}, ...],
+  "search": null
+}
+```
+
+`next[].kind` is `more` (the rest of a page), `page` (a related page),
+`mentions`, or `next-batch`; `cmd` is a `wq` command line without the leading
+`wq`. `search` is set by `mentions`: which result pages were read, out of how
+many.
 
 ## The reading room
 
@@ -98,6 +136,11 @@ http://127.0.0.1:8787/?q=wall+-n+8
 http://127.0.0.1:8787/?q=q+Stoicism&lang=de
 ```
 
+Results show how much there was — *3 of 22 quotes* — and end with a
+**keep reading** list built from the same suggestions the terminal prints:
+the rest of the page, pages named after the same thing, quotes elsewhere that
+mention it, and the next batch of a `mentions` search. Each one is a click.
+
 `/` focuses the box, `↑`/`↓` walk the history, `◐` toggles light and dark.
 
 ## Things worth trying
@@ -109,6 +152,7 @@ wq q Diligence --format json | jq -r '.[].text'
 wq random --format plain -n 1 --bare     # pipe into cowsay / a login banner
 wq q "Samuel Johnson" -g "idleness|dictionary"
 wq q Socrates --about only               # what others said *about* him
+wq mentions "memento mori" --per-page 1  # one line each, from many pages
 wq cat-search philosoph                  # then: wq cat Philosophers -r 3
 wq --lang de random                      # any language edition
 wq q Hope --copy                         # straight to the clipboard
@@ -143,7 +187,7 @@ Wikiquote text is CC BY-SA; if you republish quotes, credit the page.
 ## Parsing notes
 
 Wikitext is loose, and a few constructs bite if they are not handled
-explicitly. `wq selftest` pins all of these (32 checks, no network needed):
+explicitly. `wq selftest` pins all of these (no network needed):
 
 - **Interwiki-link templates carry visible text.** `{{w|Carcosa}}` renders as
   *Carcosa*, and `{{w|The King in Yellow|that play}}` as *that play*. A

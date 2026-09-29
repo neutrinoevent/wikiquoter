@@ -98,8 +98,7 @@
     head.appendChild(el("h2", null,
       names.length === 1 ? names[0]
         : names.length ? names.length + " pages" : "Quotes"));
-    head.appendChild(el("span", "count",
-      qs.length + (qs.length === 1 ? " quote" : " quotes")));
+    head.appendChild(el("span", "count", countLine(res, qs.length)));
     out.appendChild(head);
 
     qs.forEach(function (q, i) {
@@ -145,6 +144,62 @@
     });
   }
 
+  // "3 of 22 quotes" when wq says the page held more than it showed;
+  // "· pages 1–20 of 2,220" when the quotes came from a search.
+  function countLine(res, shown) {
+    var total = 0, exact = true;
+    (res.pages || []).forEach(function (p) { total += p.total; });
+    if (!res.pages || !res.pages.length) exact = false;
+    var line = (exact && total > shown)
+      ? shown + " of " + total + " quotes"
+      : shown + (shown === 1 ? " quote" : " quotes");
+    var s = res.search;
+    if (s) {
+      line += " · pages " + s.from + "–" + s.to + " of " +
+              Number(s.total).toLocaleString("en");
+    }
+    return line;
+  }
+
+  // wq's suggested next steps, as a quiet list under the results. Each one is
+  // a command wq itself composed; clicking it just runs it.
+  function renderNext(steps) {
+    if (!steps || !steps.length) return;
+    var box = el("section", "next");
+    box.setAttribute("aria-label", "Keep reading");
+    box.appendChild(el("h3", null, "keep reading"));
+
+    var pages = null;
+    steps.forEach(function (s) {
+      if (s.kind === "page") {
+        if (!pages) {
+          pages = el("div", "related");
+          pages.appendChild(el("span", "label", "pages about it"));
+          box.appendChild(pages);
+        }
+        var chip = el("button", null, s.label);
+        chip.type = "button";
+        chip.dataset.cmd = s.cmd;
+        pages.appendChild(chip);
+        return;
+      }
+      var row = el("button", "step " + s.kind);
+      row.type = "button";
+      row.dataset.cmd = s.cmd;
+      row.appendChild(el("span", "what", s.label));
+      row.appendChild(el("span", "arrow", "→"));
+      box.appendChild(row);
+    });
+
+    box.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button[data-cmd]");
+      if (!b) return;
+      input.value = b.dataset.cmd;
+      run(b.dataset.cmd);
+    });
+    out.appendChild(box);
+  }
+
   // Plain wq output, with bare URLs turned into links.
   function renderText(res) {
     var pre = el("pre", "text-out");
@@ -188,6 +243,7 @@
     }
     if (res.kind === "quotes") renderQuotes(res);
     else renderText(res);
+    renderNext(res.next);
 
     // Keep the address bar in step, so the view can be shared or reloaded.
     if (raw) {

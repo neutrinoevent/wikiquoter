@@ -332,6 +332,45 @@ a:hover { text-decoration-color: var(--accent); }
 /* keep reading — wq's next steps. Rows, not buttons-as-boxes: hairline
    rules like the quotes above, the accent only on hover. */
 
+/* widen — the same steps, summarised on one line under the heading so the
+   reader knows at once that there is more and in which directions. */
+
+.widen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  margin: 2px 0 4px;
+  padding: 6px 0 8px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+  color: var(--muted);
+}
+.widen .label {
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+.widen .dot { opacity: 0.6; }
+.widen button {
+  font: inherit;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 1px 1px;
+  cursor: pointer;
+}
+.widen button:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.next .step .pages {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* no top rule: the last quote's own rule already closes the list above */
 .next { margin-top: 18px; }
 .next h3 {

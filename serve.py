@@ -19,6 +19,7 @@ import http.server
 import json
 import mimetypes
 import os
+import re
 import shlex
 import socketserver
 import subprocess
@@ -113,6 +114,24 @@ def unpack(out):
     return data.get("quotes") or [], extras
 
 
+def shares_word(a, b):
+    words = lambda t: {w for w in re.findall(r"\w+", t.lower()) if len(w) > 2}
+    return bool(words(a) & words(b))
+
+
+def merge_steps(*lists):
+    """Concatenate step lists, dropping repeats. Case-insensitive, so
+    'mentions "marcus aurelius"' and 'mentions "Marcus Aurelius"' are one."""
+    seen, out = set(), []
+    for steps in lists:
+        for s in steps:
+            key = s["cmd"].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(s)
+    return out
+
+
 def mentions_step(raw):
     """Offer 'quotes that mention <what was typed>'. Composes a wq command;
     deciding what counts as a mention stays in wq.py."""
@@ -134,6 +153,13 @@ def execute(raw, lang="en"):
     # A bare title that is not a page: fall back to a search, and say so.
     # (Any failure counts — the API words 'no such page' several ways.)
     if note == "page" and code != 0:
+        # wq's ways on for the phrase as typed (mentions, its words, pages
+        # named after it) stay useful whatever page we land on instead.
+        try:
+            typed = unpack(out)[1].get("next") or []
+        except ValueError:
+            typed = []
+        typed = typed or [mentions_step(raw.strip())]
         best = nearest_page(raw.strip(), lang)
         if best:
             bargv, _, _, _ = build_argv('quote "%s"' % best.replace('"', ""),
@@ -145,11 +171,13 @@ def execute(raw, lang="en"):
                 except ValueError:
                     data, extras = None, {}
                 if data:
-                    # wq already offers mentions of the page it found; offer
-                    # the typed phrase too when it differs by more than case.
-                    if raw.strip().lower() != best.lower():
-                        extras["next"] = [mentions_step(raw.strip())] + \
-                            extras.get("next", [])
+                    found = extras.get("next", [])
+                    more = [s for s in found if s["kind"] == "more"]
+                    # A guess that shares no word with what was typed is a
+                    # long shot: offer its quotes, not its neighbourhood.
+                    if not shares_word(raw, best):
+                        found = []
+                    extras["next"] = merge_steps(more, typed, found)
                     return Result(ok=True, kind="quotes", cmd="quote",
                                   quotes=data, argv=" ".join(bargv),
                                   note=u"No page called “%s” — showing “%s”."
@@ -158,16 +186,23 @@ def execute(raw, lang="en"):
         scode, sout, serr = run_wq(sargv)
         if scode == 0:
             return Result(ok=True, kind="text", cmd="search", text=sout,
-                          argv=" ".join(sargv),
-                          next=[mentions_step(raw.strip())],
+                          argv=" ".join(sargv), next=typed,
                           note="No page called “%s” — searched instead."
                                % raw.strip())
 
     # wq exits 2 for "ran fine, found nothing" — an empty state, not a failure.
+    # With --envelope, wq still prints where else to look.
     if code == 2:
+        extras = {}
+        if wants_json:
+            try:
+                _, extras = unpack(out)
+                out = ""
+            except ValueError:
+                pass
         return Result(ok=True, kind="text", cmd=cmd,
                       text=(out or err or "").strip() or "(nothing matched)",
-                      argv=" ".join(argv))
+                      argv=" ".join(argv), **extras)
 
     if code != 0:
         msg = (err or out or "wq exited with %d" % code).strip()

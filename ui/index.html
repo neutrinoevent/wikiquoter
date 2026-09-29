@@ -31,7 +31,7 @@
   <form id="form" class="console" autocomplete="off">
     <label class="prompt" for="cmd" aria-hidden="true">›</label>
     <input id="cmd" name="cmd" type="text" spellcheck="false"
-           placeholder="Diligence   ·   wall -n 8   ·   q &quot;Samuel Johnson&quot; -n 5   ·   qotd">
+           placeholder="a page, e.g. Diligence   ·   mentions birthday   ·   wall -n 8   ·   qotd">
     <button id="go" class="go" type="submit">read</button>
   </form>
 
@@ -42,6 +42,7 @@
     <button data-cmd="Diligence">Diligence</button>
     <button data-cmd="q &quot;Samuel Johnson&quot; -n 5">Samuel Johnson</button>
     <button data-cmd="q Socrates --about only -n 4">about Socrates</button>
+    <button data-cmd="mentions &quot;memento mori&quot; --per-page 1">mentions…</button>
     <button data-cmd="cat-search philosoph">categories</button>
   </nav>
 

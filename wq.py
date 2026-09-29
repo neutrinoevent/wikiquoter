@@ -829,9 +829,12 @@ def _filter_flags(args, section: str = "") -> list:
     return flags
 
 
-def suggest(kind: str, label: str, *argv) -> None:
-    """Offer a next step. kind: more | page | mentions | next-batch."""
-    _REPORT["next"].append({"kind": kind, "label": label, "cmd": _cmd(*argv)})
+def suggest(kind: str, label: str, *argv, **extra) -> None:
+    """Offer a next step. kind: more | page | nearby | category | mentions |
+    broader | next-batch. extra: count (pages or quotes), term."""
+    step = {"kind": kind, "label": label, "cmd": _cmd(*argv)}
+    step.update((k, v) for k, v in extra.items() if v is not None)
+    _REPORT["next"].append(step)
 
 
 def _more_steps(pages, limit: int = 3) -> list:
@@ -842,7 +845,7 @@ def _more_steps(pages, limit: int = 3) -> list:
     for p in short[:limit]:
         where = p["title"] + (" › " + p["section"] if p["section"] else "")
         noun = "matching quotes" if p["filtered"] else "quotes"
-        steps.append({"kind": "more", "cmd": p["all_cmd"],
+        steps.append({"kind": "more", "cmd": p["all_cmd"], "count": p["total"],
                       "label": "All %d %s from %s" % (p["total"], noun, where)})
     return steps
 
@@ -870,19 +873,29 @@ def _wants_next(args) -> bool:
                                        getattr(args, "envelope", False))
 
 
+CHIP_KINDS = (("page", "related pages"), ("nearby", "also starting"),
+              ("category", "categories"))
+
+
 def print_next(steps) -> None:
-    pages = [s for s in steps if s["kind"] == "page"]
-    rows = [s for s in steps if s["kind"] != "page"]
     if not steps:
         return
+    chip = {k for k, _ in CHIP_KINDS}
+    rows = [s for s in steps if s["kind"] not in chip]
     print(Style.dim("keep reading"))
     w = min(40, max([len("wq " + s["cmd"]) for s in rows] or [0]))
     for s in rows:
+        label = s["label"]
+        if s.get("count") and s["kind"] in ("mentions", "broader"):
+            label += " (%s pages)" % "{:,}".format(s["count"])
         print("  " + Style.cyan(("wq " + s["cmd"]).ljust(w)) +
-              "  " + Style.dim(s["label"]))
-    if pages:
-        print("  " + Style.dim("related pages: ") +
-              " · ".join(s["label"] for s in pages))
+              "  " + Style.dim(label))
+    for kind, name in CHIP_KINDS:
+        group = [s["label"] for s in steps if s["kind"] == kind]
+        if group:
+            how = "  (wq random -c NAME -p 3)" if kind == "category" else ""
+            print("  " + Style.dim(name + ": ") + " · ".join(group) +
+                  Style.dim(how))
     print()
 
 
@@ -1128,6 +1141,12 @@ def cmd_random(args, api: Api, rng):
         shown += 1
     if shown == 0:
         die("random pages had no quotes this time — try again")
+    if args.category:
+        more = ["-p", args.pages] + (["--depth", args.depth]
+                                     if args.depth != 1 else [])
+        suggest("next-batch", "%d more from Category: %s"
+                % (args.pages, args.category),
+                "random", "-c", args.category, *more)
 
 
 def cmd_quote(args, api: Api, rng):
@@ -1155,10 +1174,16 @@ def cmd_quote(args, api: Api, rng):
              header="%s%s" % (name, "  › " + sec if sec else ""),
              page=name, total=len(qs), section=sec)
         any_out = True
+    if len(titles) == 1 and _wants_next(args):
+        if any_out:
+            _suggest_around(api, name)
+        else:                             # no page, or nothing matched: the
+            t = titles[0]                 # typed words are all we have
+            if t in results:              # the page exists; filters emptied it
+                _suggest_unfiltered(api, t, args)
+            _suggest_around(api, t, found=t in results)
     if not any_out:
         sys.exit(2)
-    if len(titles) == 1 and _wants_next(args):
-        _suggest_around(api, name)
 
 
 def cmd_open(args, api: Api, rng):
@@ -1222,19 +1247,102 @@ def _related_filter(title: str, candidates) -> list:
     return out
 
 
-def _suggest_around(api: Api, title: str, limit: int = 6) -> None:
-    """After one page: pages named after the same thing, and quotes on other
-    pages that mention it. Best effort — a failed lookup costs only the hint."""
-    try:
-        cands = [h["title"] for h in api.prefix_search(title, limit=10)]
-        q = '"%s"' % title if " " in title else title
-        cands += [h["title"] for h in api.search("intitle:" + q, limit=10)]
-    except WikiquoteError:
-        cands = []
-    for t in _related_filter(title, cands)[:limit]:
+RE_CATEGORY = re.compile(r"\[\[\s*category\s*:\s*([^\]|]+)", re.I)
+
+# Words too common to widen a search usefully.
+STOPWORDS = {"the", "and", "for", "with", "from", "that", "this", "what",
+             "your", "about", "into", "over", "upon", "than", "then", "them",
+             "they", "have", "been", "were", "will", "would", "there"}
+
+
+def _phrase_query(phrase: str) -> str:
+    """Search text for a phrase: quoted when it is several words, so the hit
+    count means pages that contain the phrase, not the words scattered."""
+    phrase = phrase.strip()
+    return '"%s"' % phrase.replace('"', "") if " " in phrase else phrase
+
+
+def _broader_words(phrase: str, limit: int = 3) -> list:
+    """The words of a multi-word phrase worth searching on their own."""
+    words = re.findall(r"[^\W\d_][\w'-]*", phrase)
+    if len(words) < 2:
+        return []
+    out = [w for w in words if len(w) >= 4 and w.lower() not in STOPWORDS]
+    return _dedupe(out)[:limit]
+
+
+def _nearby_filter(title: str, candidates, exclude=()) -> list:
+    """Titles that start with the phrase's first word — neighbouring topics."""
+    first = title.split()[0].lower() if " " in title.strip() else ""
+    if not first:
+        return []
+    skip = {title.lower()} | {t.lower() for t in exclude}
+    return [t for t in _dedupe(candidates)
+            if t.lower().startswith(first + " ") and t.lower() not in skip
+            and not re.match(r"^(List of|Wikiquote:)", t)]
+
+
+def _suggest_around(api: Api, title: str, found: bool = True,
+                    limit: int = 6) -> None:
+    """Ways to widen from one page (or one phrase that is not a page):
+    pages named after it, its categories, neighbouring topics, quotes on
+    other pages that mention it, and each of its words on its own.
+    Best effort: a failed lookup only costs that suggestion."""
+    words = _broader_words(title)
+    first = title.split()[0] if len(title.split()) > 1 else ""
+    q = '"%s"' % title if " " in title else title
+    jobs = {
+        "prefix": lambda: [h["title"] for h in api.prefix_search(title, 10)],
+        "intitle": lambda: [h["title"] for h in api.search("intitle:" + q, 10)],
+        "mentions": lambda: api.search_page(_phrase_query(title), 1)[1],
+    }
+    if found:
+        jobs["cats"] = lambda: RE_CATEGORY.findall(api.page(title)[1])
+    if first:
+        jobs["nearby"] = lambda: [h["title"] for h in
+                                  api.prefix_search(first + " ", 20)]
+    for w in words:
+        jobs["w:" + w] = (lambda w=w: api.search_page(w, 1)[1])
+
+    got = {}
+    with futures.ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(fn): key for key, fn in jobs.items()}
+        for fut in futures.as_completed(futs):
+            try:
+                got[futs[fut]] = fut.result()
+            except WikiquoteError:
+                pass
+
+    related = _related_filter(title, got.get("prefix", []) +
+                              got.get("intitle", []))[:limit]
+    for t in related:
         suggest("page", t, "q", t)
-    suggest("mentions", "Quotes that mention “%s” on other pages" % title,
-            "mentions", title)
+    for t in _nearby_filter(title, got.get("nearby", []), related)[:8]:
+        suggest("nearby", t, "q", t, term=first)
+    for c in _dedupe([c.strip() for c in got.get("cats", [])])[:4]:
+        suggest("category", c, "random", "-c", c, "-p", 3)
+    n = got.get("mentions")
+    if n:
+        suggest("mentions", "Quotes that mention “%s” on other pages" % title
+                if found else "Quotes that mention “%s”" % title,
+                "mentions", title, count=n, term=title)
+    for w in words:
+        n = got.get("w:" + w)
+        if n:
+            suggest("broader", "Quotes that mention “%s”" % w, "mentions", w,
+                    count=n, term=w)
+
+
+def _suggest_unfiltered(api: Api, title: str, args) -> None:
+    """The page exists but the filters left nothing: offer it without them."""
+    try:
+        name, wt = api.page(title)
+    except WikiquoteError:
+        return
+    n = len(parse_quotes(wt, page=name))
+    if n and _filter_flags(args):
+        suggest("more", "All %d quotes from %s, without the filters" % (n, name),
+                "q", name, "-a", count=n)
 
 
 def cmd_mentions(args, api: Api, rng):
@@ -1244,8 +1352,8 @@ def cmd_mentions(args, api: Api, rng):
     they contain the phrase. One batch of pages per run; --offset pages on.
     """
     phrase = " ".join(args.terms).strip()
-    hits, total, nxt = api.search_page(phrase, limit=args.number,
-                                       offset=args.offset)
+    hits, total, nxt = api.search_page(_phrase_query(phrase),
+                                       limit=args.number, offset=args.offset)
     if not hits:
         die("no %spages mention %r" % ("more " if args.offset else "", phrase))
 
@@ -1738,6 +1846,22 @@ def _selftest():
                                        "Birthday cake"])
           == ["Birthday cake", "S Club 7: Boyfriends & Birthdays"],
           "related pages: named after it, not itself, not lists, no dupes")
+    check(_broader_words("Quantum mechanics") == ["Quantum", "mechanics"]
+          and _broader_words("Birthday") == []
+          and _broader_words("the art of war") == [],
+          "broader words: several words only, no stopwords or short words")
+    check(_nearby_filter("Quantum mechanics",
+                         ["Quantum gravity", "Quantity", "Quantum mechanics",
+                          "Quantum Leap", "History of quantum mechanics"],
+                         exclude=["Quantum Leap"]) == ["Quantum gravity"],
+          "nearby: same first word as a whole word, not self, not related")
+    check(_phrase_query("stoic wisdom") == '"stoic wisdom"'
+          and _phrase_query("birthday") == "birthday",
+          "multi-word mentions search for the phrase, not the scattered words")
+    check(RE_CATEGORY.findall("x [[Category:Quantum mechanics|Q]] "
+                              "[[category: Emotions]]")
+          == ["Quantum mechanics", "Emotions"],
+          "categories read from wikitext, sort keys dropped")
     mq = [Quote("Many happy Birthdays to you, and many more of them."),
           Quote("Nothing to do with the matter at hand, truly.")]
     check(len(filter_quotes(mq, grep=re.escape("birthday"))) == 1,
@@ -1965,7 +2089,17 @@ def main(argv=None):
               use_cache=not args.no_cache)
 
     try:
-        args.func(args, api, rng)
+        try:
+            args.func(args, api, rng)
+        except SystemExit as e:
+            # "Ran fine, found nothing" (exit 2) can still say where to look.
+            if e.code == 2 and _wants_next(args) and _REPORT["next"]:
+                if args.format == "json":
+                    print(json.dumps(envelope(), ensure_ascii=False, indent=2))
+                else:
+                    print()
+                    print_next(next_steps())
+            raise
         if args.format == "json" and args.envelope:
             print(json.dumps(envelope(), ensure_ascii=False, indent=2))
         elif args.format == "json" and _JSON_BUFFER:

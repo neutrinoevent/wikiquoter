@@ -11,7 +11,7 @@ chmod +x wq.py
 mv wq.py ~/.local/bin/wq      # or:  ln -s "$PWD/wq.py" /usr/local/bin/wq
 ```
 
-No install, no dependencies. `wq selftest` runs 37 offline checks.
+No install, no dependencies. `wq selftest` runs 41 offline checks.
 For a browser front end, see [the reading room](#the-reading-room).
 
 ## A quick tour
@@ -49,7 +49,7 @@ Every reading command also takes the filters in the next section.
 | `wq saved` | list or use bookmarks | `-r N` quotes from N random bookmarks · `--quotes` from all · `-o` open them |
 | `wq forget PAGE...` | drop bookmarks | |
 | `wq cache` | cache location and size | `--clear` |
-| `wq selftest` | 37 offline checks | |
+| `wq selftest` | 41 offline checks | |
 
 ## Filtering and output
 
@@ -82,13 +82,30 @@ widen the net:
 
 ```
 keep reading
-  wq q Birthday -a      All 22 quotes from Birthday
-  wq mentions Birthday  Quotes that mention “Birthday” on other pages
-  related pages: Birthday cake · SpongeBob's Big Birthday Blowout · …
+  wq q "Quantum mechanics" -a      All 71 quotes from Quantum mechanics
+  wq mentions "Quantum mechanics"  Quotes that mention “Quantum mechanics” on other pages (347 pages)
+  wq mentions Quantum              Quotes that mention “Quantum” (905 pages)
+  wq mentions mechanics            Quotes that mention “mechanics” (987 pages)
+  related pages: History of quantum mechanics · Measurement in quantum mechanics · …
+  also starting: Quantum field theory · Quantum computing · Quantum gravity · …
+  categories: Quantum mechanics  (wq random -c NAME -p 3)
 ```
 
-Any filters in play (`-s`, `-g`, `--max`, …) carry over into the suggestions.
-`mentions` works in batches of search results and suggests the next batch.
+The directions, widest last:
+
+- **the rest of the page** — every quote, with any filters in play (`-s`,
+  `-g`, `--max`, …) carried over; or, if the filters left nothing, the page
+  without them;
+- **related pages** — pages whose titles contain the page's name;
+- **also starting** — pages whose titles share its first word;
+- **categories** the page belongs to — three random pages from one, and
+  three more each time;
+- **mentions** — quotes on any page that contain the phrase, and, for a
+  phrase of several words, each word on its own. Counts are pages found by
+  full-text search. `mentions` reads search results a batch at a time and
+  suggests the next batch.
+
+A phrase that is not a page still gets the mentions and broader-word steps.
 
 `--format json` stays a bare list of quotes, one document per run.
 `--format json --envelope` wraps the same list with what was left out:
@@ -105,9 +122,13 @@ Any filters in play (`-s`, `-g`, `--max`, …) carry over into the suggestions.
 ```
 
 `next[].kind` is `more` (the rest of a page), `page` (a related page),
-`mentions`, or `next-batch`; `cmd` is a `wq` command line without the leading
-`wq`. `search` is set by `mentions`: which result pages were read, out of how
-many.
+`nearby` (same first word), `category`, `mentions`, `broader` (one word of
+the phrase), or `next-batch`. `cmd` is a `wq` command line without the leading
+`wq`; `count`, where present, is the quote total (`more`) or pages found
+(`mentions`, `broader`); `term` is the word or phrase a step is about.
+`search` is set by `mentions`: which result pages were read, out of how many.
+When nothing matched (exit 2) the envelope is still printed, with an empty
+`quotes` list and whatever steps apply.
 
 ## The reading room
 
@@ -136,10 +157,12 @@ http://127.0.0.1:8787/?q=wall+-n+8
 http://127.0.0.1:8787/?q=q+Stoicism&lang=de
 ```
 
-Results show how much there was — *3 of 22 quotes* — and end with a
-**keep reading** list built from the same suggestions the terminal prints:
-the rest of the page, pages named after the same thing, quotes elsewhere that
-mention it, and the next batch of a `mentions` search. Each one is a click.
+Results show how much there was — *3 of 71 quotes* — and, right under the
+heading, a **widen** line that says how far a reading can go: *all 71 ·
+mentioned on 347 pages · “Quantum” (905) · 5 pages about it · 1 category*.
+The full **keep reading** list under the quotes holds the same suggestions the
+terminal prints, grouped the same way. Everything in both is a click, and a
+search that finds nothing still offers where else to look.
 
 `/` focuses the box, `↑`/`↓` walk the history, `◐` toggles light and dark.
 

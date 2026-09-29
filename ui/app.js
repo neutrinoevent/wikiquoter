@@ -100,6 +100,7 @@
         : names.length ? names.length + " pages" : "Quotes"));
     head.appendChild(el("span", "count", countLine(res, qs.length)));
     out.appendChild(head);
+    renderWiden(res.next);
 
     qs.forEach(function (q, i) {
       var card = el("div", "q");
@@ -161,42 +162,111 @@
     return line;
   }
 
-  // wq's suggested next steps, as a quiet list under the results. Each one is
-  // a command wq itself composed; clicking it just runs it.
-  function renderNext(steps) {
-    if (!steps || !steps.length) return;
-    var box = el("section", "next");
-    box.setAttribute("aria-label", "Keep reading");
-    box.appendChild(el("h3", null, "keep reading"));
+  // wq's suggested next steps. Each is a command wq itself composed; the
+  // page only lays them out and runs them when clicked.
 
-    var pages = null;
-    steps.forEach(function (s) {
-      if (s.kind === "page") {
-        if (!pages) {
-          pages = el("div", "related");
-          pages.appendChild(el("span", "label", "pages about it"));
-          box.appendChild(pages);
-        }
-        var chip = el("button", null, s.label);
-        chip.type = "button";
-        chip.dataset.cmd = s.cmd;
-        pages.appendChild(chip);
+  var CHIPS = { page: "pages about it", nearby: "also starting",
+                category: "categories" };
+
+  function fmt(n) { return Number(n).toLocaleString("en"); }
+
+  function stepButton(s, cls, text) {
+    var b = el("button", cls, text);
+    b.type = "button";
+    b.dataset.cmd = s.cmd;
+    return b;
+  }
+
+  function onStep(box) {
+    box.addEventListener("click", function (ev) {
+      var j = ev.target.closest("[data-jump]");
+      if (j) {
+        var t = document.getElementById("next");
+        if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
-      var row = el("button", "step " + s.kind);
-      row.type = "button";
-      row.dataset.cmd = s.cmd;
-      row.appendChild(el("span", "what", s.label));
-      row.appendChild(el("span", "arrow", "→"));
-      box.appendChild(row);
-    });
-
-    box.addEventListener("click", function (ev) {
       var b = ev.target.closest("button[data-cmd]");
       if (!b) return;
       input.value = b.dataset.cmd;
       run(b.dataset.cmd);
     });
+  }
+
+  // One line under the heading that says, up front, how far this can go:
+  // "widen  all 71 · 5 pages about it · 1 category · on 347 pages · quantum".
+  // Runnable steps run; groups jump to the full list at the bottom.
+  function renderWiden(steps) {
+    if (!steps || !steps.length) return;
+    var bar = el("nav", "widen");
+    bar.setAttribute("aria-label", "Ways to widen this");
+    bar.appendChild(el("span", "label", "widen"));
+    var items = [];
+    var groups = {};
+    steps.forEach(function (s) {
+      if (CHIPS[s.kind]) { groups[s.kind] = (groups[s.kind] || 0) + 1; return; }
+      var text;
+      if (s.kind === "more") text = "all " + fmt(s.count || "");
+      else if (s.kind === "mentions") text = "mentioned on " + fmt(s.count) + " pages";
+      else if (s.kind === "broader") text = "“" + s.term + "” (" + fmt(s.count) + ")";
+      else if (s.kind === "next-batch") text = "next batch";
+      else return;
+      if (s.kind === "more" && items.some(function (i) { return i.more; })) return;
+      var b = stepButton(s, null, text);
+      b.title = s.label;
+      items.push({ node: b, more: s.kind === "more" });
+    });
+    Object.keys(CHIPS).forEach(function (k) {
+      if (!groups[k]) return;
+      var n = groups[k];
+      var text = k === "page" ? n + (n === 1 ? " page" : " pages") + " about it"
+               : k === "nearby" ? n + " more by name"
+               : n + (n === 1 ? " category" : " categories");
+      var b = el("button", null, text + " ↓");
+      b.type = "button";
+      b.dataset.jump = "1";
+      items.push({ node: b });
+    });
+    items.forEach(function (i, n) {
+      if (n) bar.appendChild(el("span", "dot", "·"));
+      bar.appendChild(i.node);
+    });
+    onStep(bar);
+    out.appendChild(bar);
+  }
+
+  // The full list, under the results.
+  function renderNext(steps) {
+    if (!steps || !steps.length) return;
+    var box = el("section", "next");
+    box.id = "next";
+    box.setAttribute("aria-label", "Keep reading");
+    box.appendChild(el("h3", null, "keep reading"));
+
+    steps.forEach(function (s) {
+      if (CHIPS[s.kind]) return;
+      var row = stepButton(s, "step " + s.kind);
+      row.appendChild(el("span", "what", s.label));
+      var right = el("span", "arrow");
+      if (s.count && (s.kind === "mentions" || s.kind === "broader")) {
+        right.appendChild(el("span", "pages", fmt(s.count) + " pages"));
+      }
+      right.appendChild(document.createTextNode("→"));
+      row.appendChild(right);
+      box.appendChild(row);
+    });
+
+    Object.keys(CHIPS).forEach(function (k) {
+      var group = steps.filter(function (s) { return s.kind === k; });
+      if (!group.length) return;
+      var line = el("div", "related");
+      var label = CHIPS[k];
+      if (k === "nearby" && group[0].term) label += " “" + group[0].term + "”";
+      line.appendChild(el("span", "label", label));
+      group.forEach(function (s) { line.appendChild(stepButton(s, null, s.label)); });
+      box.appendChild(line);
+    });
+
+    onStep(box);
     out.appendChild(box);
   }
 
